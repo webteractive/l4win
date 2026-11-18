@@ -1,0 +1,46 @@
+{
+    "name": "webteractive/l4win",
+    "description": "Laravel for Windows: run Laravel projects natively on Windows (Pail, composer run dev, Octane with FrankenPHP, Sail without bash, Horizon queues) plus an environment doctor.",
+    "keywords": [
+        "laravel",
+        "windows",
+        "l4win",
+        "pail",
+        "octane",
+        "frankenphp",
+        "sail",
+        "horizon",
+        "pcntl"
+    ],
+    "type": "library",
+    "license": "MIT",
+    "require": {
+        "php": "^8.2",
+        "illuminate/console": "^10.24|^11.0|^12.0|^13.0",
+        "illuminate/support": "^10.24|^11.0|^12.0|^13.0"
+    },
+    "suggest": {
+        "laravel/pail": "`php artisan pail` works without pcntl.",
+        "laravel/octane": "`octane:start` works on Windows with the FrankenPHP server.",
+        "laravel/sail": "`vendor/bin/l4win sail` runs Sail without bash."
+    },
+    "conflict": {
+        "laravel/pail": "<1.2.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Webteractive\\L4win\\": "src/"
+        }
+    },
+    "bin": [
+        "bin/l4win"
+    ],
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Webteractive\\L4win\\L4winServiceProvider"
+            ]
+        }
+    },
+    "minimum-stability": "stable"
+}

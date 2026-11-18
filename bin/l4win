@@ -1,0 +1,197 @@
+#!/usr/bin/env php
+<?php
+
+/*
+ * l4win: Laravel for Windows.
+ *
+ *   vendor\bin\l4win doctor            Check this machine and project
+ *   vendor\bin\l4win sail up -d        Laravel Sail without bash
+ *
+ * Framework-free, so it works even when the Laravel app can't boot.
+ */
+
+foreach (array_filter([
+    $GLOBALS['_composer_autoload_path'] ?? null,
+    __DIR__.'/../vendor/autoload.php',
+    __DIR__.'/../../../autoload.php',
+]) as $autoload) {
+    if (is_file($autoload)) {
+        require $autoload;
+        break;
+    }
+}
+
+// Fallback so the tool still works if Composer's autoloader is broken.
+spl_autoload_register(function (string $class): void {
+    $prefix = 'Webteractive\\L4win\\';
+
+    if (str_starts_with($class, $prefix) && is_file($file = __DIR__.'/../src/'.str_replace('\\', '/', substr($class, strlen($prefix))).'.php')) {
+        require $file;
+    }
+});
+
+use Webteractive\L4win\Doctor\Check;
+use Webteractive\L4win\Doctor\Doctor;
+use Webteractive\L4win\Sail\DotEnv;
+use Webteractive\L4win\Sail\SailCommandBuilder;
+
+$args = array_slice($argv, 1);
+$command = array_shift($args) ?? 'help';
+
+exit(match ($command) {
+    'doctor' => l4win_doctor(),
+    'sail' => l4win_sail($args),
+    'help', '-h', '--help' => l4win_help(0),
+    default => l4win_help(1, "Unknown command [{$command}]."),
+});
+
+function l4win_help(int $exitCode, ?string $error = null): int
+{
+    if ($error !== null) {
+        fwrite(STDERR, $error.PHP_EOL.PHP_EOL);
+    }
+
+    echo <<<'HELP'
+l4win: Laravel for Windows
+
+Usage:
+  l4win doctor                 Check PHP, extensions, tools and this project
+  l4win sail COMMAND [args]    Laravel Sail without bash (Docker Desktop)
+
+Sail commands are the same as vendor/bin/sail: up, up -d, stop, down, ps,
+build, artisan, php, composer, test, pest, pint, tinker, node, npm, npx, yarn,
+bun, mysql, mariadb, psql, redis, valkey, mongodb, shell, root-shell, debug,
+dusk, bin, run, share, open. Unknown commands go to docker compose.
+
+Artisan commands (inside a Laravel app):
+  php artisan l4win:doctor
+  php artisan l4win:queues     Run config/horizon.php supervisors natively
+
+HELP;
+
+    return $exitCode;
+}
+
+function l4win_doctor(): int
+{
+    $checks = (new Doctor(getcwd() ?: null))->run();
+    $failures = 0;
+
+    echo PHP_EOL;
+
+    foreach ($checks as $check) {
+        printf("  %s %-24s %s\n", $check->symbol(), $check->label, $check->value);
+
+        if ($check->hint !== null) {
+            printf("      -> %s\n", $check->hint);
+        }
+
+        $failures += $check->status === Check::FAIL ? 1 : 0;
+    }
+
+    echo PHP_EOL.($failures > 0 ? "{$failures} problem(s) found." : 'No blocking problems.').PHP_EOL;
+
+    return $failures > 0 ? 1 : 0;
+}
+
+/**
+ * @param  list<string>  $args
+ */
+function l4win_sail(array $args): int
+{
+    if ($args === [] || in_array($args[0], ['help', '-h', '-help', '--help'], true)) {
+        return l4win_help($args === [] ? 1 : 0);
+    }
+
+    // Resolve the environment the way Sail does: process env, then .env (or .env.$APP_ENV), then defaults.
+    $processEnv = array_map('strval', getenv());
+    $envFile = (($processEnv['APP_ENV'] ?? '') !== '' && is_file('.env.'.$processEnv['APP_ENV']))
+        ? '.env.'.$processEnv['APP_ENV']
+        : '.env';
+    $dotEnv = is_file($envFile) ? DotEnv::parse((string) file_get_contents($envFile), $processEnv) : [];
+    $env = SailCommandBuilder::resolveEnvironment($processEnv, $dotEnv);
+
+    $docker = $env['SAIL_DOCKER_BINARY'];
+    [$composeV2] = l4win_capture([$docker, 'compose', 'version'], $env);
+    $compose = $composeV2 === 0 ? [$docker, 'compose'] : [$docker.'-compose'];
+
+    foreach (SailCommandBuilder::composeFiles($env['SAIL_FILES'], PHP_OS_FAMILY === 'Windows') as $file) {
+        if (! is_file($file)) {
+            fwrite(STDERR, "Unable to find Docker Compose file: '{$file}'\n");
+
+            return 1;
+        }
+
+        array_push($compose, '-f', $file);
+    }
+
+    $running = true;
+
+    if (($env['SAIL_SKIP_CHECKS'] ?? '') === '') {
+        [$info] = l4win_capture([$docker, 'info'], $env);
+
+        if ($info !== 0) {
+            fwrite(STDERR, "Docker is not running. Start Docker Desktop and try again.\n");
+
+            return 1;
+        }
+
+        [, $status] = l4win_capture(array_merge($compose, ['ps', $env['APP_SERVICE']]), $env);
+
+        if (preg_match('/Exit|exited/', $status)) {
+            fwrite(STDERR, "Shutting down old Sail processes...\n");
+            l4win_capture(array_merge($compose, ['down']), $env);
+            $running = false;
+        } else {
+            [, $ids] = l4win_capture(array_merge($compose, ['ps', '-q']), $env);
+            $running = trim($ids) !== '';
+        }
+    }
+
+    if (! $running && SailCommandBuilder::requiresRunningContainers($args[0])) {
+        fwrite(STDERR, "Sail is not running.\n\nStart it with: 'vendor\\bin\\l4win sail up' or 'vendor\\bin\\l4win sail up -d'\n");
+
+        return 1;
+    }
+
+    $plan = (new SailCommandBuilder($env, $compose, stream_isatty(STDIN)))->build($args);
+
+    if ($plan['type'] === 'open') {
+        return l4win_run(match (PHP_OS_FAMILY) {
+            'Windows' => ['cmd', '/c', 'start', '', $plan['url']],
+            'Darwin' => ['open', $plan['url']],
+            default => ['xdg-open', $plan['url']],
+        }, $env);
+    }
+
+    return l4win_run($plan['command'], $env);
+}
+
+/**
+ * Run a command with the terminal attached, return its exit code.
+ */
+function l4win_run(array $command, array $env): int
+{
+    $process = proc_open($command, [0 => STDIN, 1 => STDOUT, 2 => STDERR], $pipes, null, $env);
+
+    return is_resource($process) ? proc_close($process) : 1;
+}
+
+/**
+ * Run a command quietly, return [exit code, stdout].
+ */
+function l4win_capture(array $command, array $env): array
+{
+    $process = proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, $env);
+
+    if (! is_resource($process)) {
+        return [1, ''];
+    }
+
+    $out = stream_get_contents($pipes[1]);
+    stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+
+    return [proc_close($process), (string) $out];
+}
