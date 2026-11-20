@@ -1,0 +1,49 @@
+name: l4win.exe
+
+on:
+  push:
+    tags: ['cli-v*']
+  pull_request:
+    paths: ['cli/**']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+
+      - run: go vet ./...
+      - run: go test ./...
+
+      - name: Build
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#cli-v}"
+          [[ "$GITHUB_REF_TYPE" == tag ]] || version="dev-${GITHUB_SHA::7}"
+          mkdir -p dist
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath \
+            -ldflags "-s -w -X main.buildVersion=${version}" -o dist/l4win.exe .
+          (cd dist && sha256sum l4win.exe > l4win.exe.sha256)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: l4win
+          path: cli/dist/*
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            cli/dist/l4win.exe
+            cli/dist/l4win.exe.sha256

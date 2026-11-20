@@ -8,6 +8,7 @@ use Laravel\Octane\Commands\StartCommand as OctaneStartCommand;
 use Laravel\Octane\Commands\StartFrankenPhpCommand as OctaneStartFrankenPhpCommand;
 use Laravel\Pail\Console\Commands\PailCommand;
 use Webteractive\L4win\Console\DoctorCommand;
+use Webteractive\L4win\Console\ListCommand;
 use Webteractive\L4win\Console\QueuesCommand;
 use Webteractive\L4win\Console\WindowsPailCommand;
 use Webteractive\L4win\Octane\WindowsInstallCommand;
@@ -43,6 +44,7 @@ class L4winServiceProvider extends ServiceProvider
         if ($this->app->runningInConsole()) {
             $this->commands([
                 DoctorCommand::class,
+                ListCommand::class,
                 QueuesCommand::class,
             ]);
         }
