@@ -30,42 +30,134 @@ spl_autoload_register(function (string $class): void {
     }
 });
 
+use Webteractive\L4win\Cli\CliInstaller;
+use Webteractive\L4win\Cli\CommandList;
 use Webteractive\L4win\Doctor\Check;
 use Webteractive\L4win\Doctor\Doctor;
 use Webteractive\L4win\Sail\DotEnv;
 use Webteractive\L4win\Sail\SailCommandBuilder;
 
 $args = array_slice($argv, 1);
-$command = array_shift($args) ?? 'help';
+$command = array_shift($args) ?? 'list';
 
 exit(match ($command) {
+    'list' => l4win_list(),
     'doctor' => l4win_doctor(),
     'sail' => l4win_sail($args),
-    'help', '-h', '--help' => l4win_help(0),
-    default => l4win_help(1, "Unknown command [{$command}]."),
+    'queues' => l4win_queues($args),
+    'install-cli' => l4win_install_cli($args),
+    'commands' => l4win_commands(),
+    'help', '-h', '--help' => l4win_help($args[0] ?? null),
+    default => l4win_unknown($command),
 });
 
-function l4win_help(int $exitCode, ?string $error = null): int
+function l4win_list(): int
 {
-    if ($error !== null) {
-        fwrite(STDERR, $error.PHP_EOL.PHP_EOL);
+    echo CommandList::render(CommandList::findCli());
+
+    return 0;
+}
+
+/**
+ * Machine-readable list for l4win.exe, which merges it into its own.
+ */
+function l4win_commands(): int
+{
+    echo CommandList::machineReadable();
+
+    return 0;
+}
+
+function l4win_unknown(string $command): int
+{
+    fwrite(STDERR, "Unknown command [{$command}].".PHP_EOL.PHP_EOL);
+    echo CommandList::render(CommandList::findCli());
+
+    return 1;
+}
+
+function l4win_help(?string $topic): int
+{
+    switch ($topic) {
+        case null:
+            return l4win_list();
+        case 'sail':
+            return l4win_sail_help(0);
+        case 'doctor':
+            echo "l4win doctor\n\nChecks PHP, php.ini, extensions, memory_limit, composer/node/npm/git, Git long\npaths and line endings, .env and APP_KEY, writable folders, OneDrive locations,\nold Pail versions, Octane's server, Horizon, pcntl-only packages, and CRLF\nscripts in Sail's Docker files. Works even when the app can't boot.\n";
+
+            return 0;
+        case 'queues':
+            echo "l4win queues [options]\n\nRuns the supervisors in config/horizon.php with Laravel's own workers, since\nHorizon itself needs pcntl. Same as `php artisan l4win:queues`; for its\noptions run `php artisan l4win:queues --help`.\n";
+
+            return 0;
+        case 'install-cli':
+            echo "l4win install-cli [--no-setup]\n\nDownloads l4win.exe from https://github.com/".CliInstaller::REPOSITORY."/releases\n(checked against its published SHA-256) into %LOCALAPPDATA%\\l4win\\bin, then runs\n`l4win setup`: PHP, Composer and Node.js, with `l4win`, php, composer, node,\nnpm and npx on your PATH. --no-setup only downloads it.\n";
+
+            return 0;
+        default:
+            return l4win_unknown($topic);
+    }
+}
+
+/**
+ * `php artisan l4win:queues`, run from the project folder.
+ *
+ * @param  list<string>  $args
+ */
+function l4win_queues(array $args): int
+{
+    if (! is_file('artisan')) {
+        fwrite(STDERR, "Run this from the Laravel project folder (where artisan is).\n");
+
+        return 1;
     }
 
-    echo <<<'HELP'
-l4win: Laravel for Windows
+    return l4win_run(array_merge([PHP_BINARY, 'artisan', 'l4win:queues'], $args), getenv());
+}
 
-Usage:
-  l4win doctor                 Check PHP, extensions, tools and this project
-  l4win sail COMMAND [args]    Laravel Sail without bash (Docker Desktop)
+/**
+ * @param  list<string>  $args
+ */
+function l4win_install_cli(array $args): int
+{
+    if (PHP_OS_FAMILY !== 'Windows') {
+        fwrite(STDERR, "l4win.exe is for Windows; on ".PHP_OS_FAMILY." there's nothing to install.\n");
+
+        return 1;
+    }
+
+    try {
+        echo "Downloading l4win.exe...\n";
+        [$version, $path] = (new CliInstaller)->install(CliInstaller::target());
+    } catch (RuntimeException $e) {
+        fwrite(STDERR, $e->getMessage().PHP_EOL);
+
+        return 1;
+    }
+
+    echo "Installed l4win {$version} at {$path}\n";
+
+    if (in_array('--no-setup', $args, true)) {
+        echo "Run `{$path} setup` to install PHP, Composer and Node.js and put l4win on your PATH.\n";
+
+        return 0;
+    }
+
+    echo "Running l4win setup...\n\n";
+
+    return l4win_run([$path, 'setup'], getenv());
+}
+
+function l4win_sail_help(int $exitCode): int
+{
+    echo <<<'HELP'
+l4win sail COMMAND [args]: Laravel Sail without bash (needs Docker Desktop)
 
 Sail commands are the same as vendor/bin/sail: up, up -d, stop, down, ps,
 build, artisan, php, composer, test, pest, pint, tinker, node, npm, npx, yarn,
 bun, mysql, mariadb, psql, redis, valkey, mongodb, shell, root-shell, debug,
 dusk, bin, run, share, open. Unknown commands go to docker compose.
-
-Artisan commands (inside a Laravel app):
-  php artisan l4win:doctor
-  php artisan l4win:queues     Run config/horizon.php supervisors natively
 
 HELP;
 
@@ -100,7 +192,7 @@ function l4win_doctor(): int
 function l4win_sail(array $args): int
 {
     if ($args === [] || in_array($args[0], ['help', '-h', '-help', '--help'], true)) {
-        return l4win_help($args === [] ? 1 : 0);
+        return l4win_sail_help($args === [] ? 1 : 0);
     }
 
     // Resolve the environment the way Sail does: process env, then .env (or .env.$APP_ENV), then defaults.

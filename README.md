@@ -9,6 +9,116 @@ keep it installed.
 never skips platform checks. Where a tool can't work on Windows, the package
 says so and offers a real alternative instead of hiding the error.
 
+## No Docker, WSL or Herd: `l4win.exe`
+
+l4win comes in two parts:
+
+- **`l4win.exe`** sets up the machine. It downloads the official PHP, Composer
+  and Node.js builds into `%LOCALAPPDATA%\l4win` and puts `php`, `composer`,
+  `node`, `npm` and `npx` on your PATH. No admin rights, nothing running in the
+  background.
+- **The Composer package** (the rest of this README) fixes the Laravel tools
+  that don't work on Windows.
+
+Each part works without the other. **Already have a Laravel app and a working
+PHP** (Herd, Laragon, XAMPP, or PHP from php.net)? Install only the package
+([Install](#install)) and `composer run dev`, Pail, Octane with FrankenPHP,
+`vendor\bin\l4win sail`, `php artisan l4win:queues` and the doctor work on the
+PHP you already use (`php artisan l4win` lists them).
+`l4win.exe` adds the PHP, databases, Redis, mail and HTTPS sites, for when you
+don't want those other tools.
+
+```powershell
+l4win setup                 # PHP, Composer, Node.js, and the commands on PATH
+composer create-project laravel/laravel myapp
+cd myapp
+composer run dev
+```
+
+Each project gets the PHP version its `composer.json` asks for (or its
+`.php-version`); a missing version is installed the first time it's needed.
+`l4win list`, `l4win use php@8.4` and `l4win which` show and change versions.
+Programs run inside a Windows Job Object, so stopping or killing a command also
+stops everything it started. A killed `artisan serve` doesn't leave a PHP
+server running.
+
+Databases and mail come from the project's `.env` too:
+
+```powershell
+l4win up        # DB_CONNECTION=mysql → MySQL 8.4, mariadb → MariaDB (LTS),
+                # pgsql → PostgreSQL 18 (superuser postgres, no password),
+                # a redis cache/queue/session driver → Redis (see below),
+                # MAIL_MAILER=smtp → Mailpit (inbox at http://localhost:8025);
+                # creates DB_DATABASE and DB_USERNAME if they don't exist
+l4win status    # what's running, on which port, where the data is
+l4win down      # stop them
+```
+
+Services are shared by all projects (one MySQL, a database per project), run
+hidden in the background until `l4win down`, and use the ports in `.env`
+(`DB_PORT`, `MAIL_PORT`). If another program already has the port, such as a
+MySQL installed as a Windows service, l4win names it and doesn't start. Data
+lives in `%LOCALAPPDATA%\l4win\data`. `l4win db create NAME --user=… --password=…`
+creates more databases on whichever database server is running.
+
+**Redis:** Redis has no official Windows build, so l4win runs
+[Garnet](https://github.com/microsoft/garnet), Microsoft's open-source server
+that speaks the Redis protocol. Laravel's cache, locks, sessions and queues
+(including delayed jobs, which use Lua scripts) work against it unchanged.
+Garnet needs .NET; l4win downloads Microsoft's .NET runtime into its own folder
+for Garnet only, without installing anything system-wide. Data is saved on
+`l4win down` and loaded on the next start. Every PHP l4win installs also gets the
+`redis` extension (`REDIS_CLIENT=phpredis`, Laravel's default); for PHP
+versions installed earlier, run `l4win install phpredis`.
+
+### Sites at `https://NAME.localhost`
+
+```powershell
+cd C:\code; l4win park      # every Laravel app in C:\code: https://FOLDER.localhost
+cd C:\elsewhere\shop; l4win link     # or one project: https://shop.localhost
+l4win up web                # start serving (l4win up in a site starts it too)
+l4win trust                 # once: browsers trust the local certificates
+l4win sites                 # list them; l4win open opens this project's site
+```
+
+Browsers send `*.localhost` to this machine by themselves, so there's no
+hosts file to edit. Caddy (official build) serves the sites over HTTPS with a
+certificate authority it creates on this machine; `l4win trust` adds that to
+your user's trusted certificates (Windows asks to confirm, no admin needed).
+PHP runs as `php-cgi.exe` workers, which come with every PHP for Windows, and
+each site gets the PHP version its project asks for. A hidden l4win process
+keeps the workers running and stops everything on `l4win down`. Set `APP_URL`
+to the site's address. Command-line tools (curl, PHP's own HTTP client) don't
+resolve `*.localhost` the way browsers do. Calls from one site to another need
+`127.0.0.1` with a `Host` header.
+
+The only thing it may ask for is Microsoft's Visual C++ runtime, which PHP for
+Windows needs and most machines already have (`l4win install vcredist`).
+
+**Another PHP or Composer still runs?** Windows searches the system PATH before
+the user PATH, so a `php` or `composer` installed for all users (for example
+Composer-Setup's `C:\ProgramData\ComposerSetup\bin`, or a PHP folder added by
+XAMPP) wins over l4win's. `l4win setup` lists them. Uninstall that program, or
+remove its folder from the system PATH (System Properties > Environment
+Variables, needs admin), then open a new terminal; `where.exe composer` shows
+which one runs. Until then, `l4win php` and `l4win composer` always use
+l4win's. Folders on the user PATH (Herd's, for example) come after l4win's
+and don't get in the way.
+
+Download `l4win.exe` from the releases page, or from a project that has this
+package, run `vendor\bin\l4win install-cli`: it downloads the release (checked
+against its SHA-256) and runs `l4win setup`. To uninstall it, run
+`l4win setup --undo` and delete `%LOCALAPPDATA%\l4win`. Building it is covered in
+[cli/README.md](cli/README.md).
+
+### Seeing every command
+
+Type `l4win` in any terminal for the grouped list of commands. Inside a project
+with this package, the list also includes the package's commands (`doctor`,
+`queues`, `sail`), and `l4win help COMMAND` explains any of them. Without
+`l4win.exe`, `vendor\bin\l4win` or `php artisan l4win` show the package's part of
+the list and how to get the rest.
+
 ## What it covers
 
 | Tool | On Windows with this package | How |

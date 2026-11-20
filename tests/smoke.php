@@ -5,6 +5,8 @@ spl_autoload_register(function ($c) {
     if (str_starts_with($c, $p)) require __DIR__.'/../src/'.str_replace('\\', '/', substr($c, strlen($p))).'.php';
 });
 
+use Webteractive\L4win\Cli\CliInstaller;
+use Webteractive\L4win\Cli\CommandList;
 use Webteractive\L4win\Doctor\Doctor;
 use Webteractive\L4win\Queues\HorizonPlan;
 use Webteractive\L4win\Sail\DotEnv;
@@ -95,5 +97,45 @@ check($cmd === ['php', 'artisan', 'queue:listen', 'redis', '--name=emails', '--q
 // --- Doctor -----------------------------------------------------------------
 $checks = (new Doctor(null))->run();
 check(count($checks) > 3, 'doctor runs ('.count($checks).' checks)');
+
+// --- Command list -----------------------------------------------------------
+$machine = CommandList::machineReadable();
+check(str_contains($machine, "doctor\t") && str_contains($machine, "sail\t") && str_contains($machine, "queues\t"), 'commands: machine-readable list has doctor, sail, queues');
+check(count(explode("\n", trim($machine))) === count(CommandList::package()), 'commands: one line per command');
+$listed = CommandList::render('C:\\l4win\\bin\\l4win.exe');
+check(str_contains($listed, 'Installed: C:\\l4win\\bin\\l4win.exe') && ! str_contains($listed, 'install-cli'), 'commands: list mentions installed l4win.exe');
+if (PHP_OS_FAMILY === 'Windows') {
+    check(str_contains(CommandList::render(null), 'install-cli'), 'commands: list offers install-cli when l4win.exe is missing');
+}
+
+// --- l4win.exe installer ----------------------------------------------------
+$asset = fn ($name) => ['name' => $name, 'browser_download_url' => 'https://example.test/'.$name];
+$releases = [
+    ['tag_name' => 'v0.2.0', 'assets' => []],                                            // package release
+    ['tag_name' => 'cli-v0.3.0', 'prerelease' => true, 'assets' => [$asset('l4win.exe'), $asset('l4win.exe.sha256')]],
+    ['tag_name' => 'cli-v0.2.0', 'assets' => [$asset('l4win.exe'), $asset('l4win.exe.sha256')]],
+];
+check(CliInstaller::pickRelease($releases)['version'] === '0.2.0', 'installer: newest stable cli-v release');
+
+$exe = 'MZ fake exe';
+$files = [
+    'https://api.github.com/repos/webteractive/l4win/releases?per_page=30' => json_encode($releases),
+    'https://example.test/l4win.exe' => $exe,
+    'https://example.test/l4win.exe.sha256' => hash('sha256', $exe)." *l4win.exe\n",
+];
+$target = sys_get_temp_dir().'/l4win-'.uniqid().'/bin/l4win.exe';
+[$version, $path] = (new CliInstaller(fn ($url) => $files[$url] ?? false))->install($target);
+check($version === '0.2.0' && file_get_contents($path) === $exe, 'installer: downloads and verifies l4win.exe');
+
+$files['https://example.test/l4win.exe'] = 'tampered';
+try {
+    (new CliInstaller(fn ($url) => $files[$url] ?? false))->install($target);
+    check(false, 'installer: rejects a checksum mismatch');
+} catch (RuntimeException $e) {
+    check(str_contains($e->getMessage(), 'SHA-256') && file_get_contents($path) === $exe, 'installer: rejects a checksum mismatch and keeps the old file');
+}
+unlink($path);
+rmdir(dirname($path));
+rmdir(dirname($path, 2));
 
 exit($failed ? 1 : 0);
